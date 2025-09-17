@@ -1,0 +1,147 @@
+#!/bin/bash
+# backup_restore.sh
+# Script untuk backup & restore dengan config dinamis
+
+CONFIG="/etc/barestore.conf"
+BASE_DIR="/root/Documents/barestore"
+BACKUP_DIR="$BASE_DIR/backup"
+TMP_RESTORE="/tmp/restore_tmp"
+
+mkdir -p "$BACKUP_DIR"
+
+backup() {
+    MODE="$1"   # tar.gz atau folder
+    echo "=== Mulai Backup (mode: $MODE) ==="
+    declare -a paths_to_backup=()
+
+    while read -r path do_backup do_restore; do
+        [[ "$path" =~ ^#.*$ || -z "$path" ]] && continue
+        if [[ "$do_backup" == "yes" ]]; then
+            matches=$(ls -d $path 2>/dev/null)
+            if [[ $? -ne 0 || -z "$matches" ]]; then
+                echo "❌ Path $path tidak ditemukan."
+                read -p "Mau lanjut backup (y/n)? " ans
+                [[ "$ans" != "y" ]] && exit 1
+                continue
+            fi
+            for m in $matches; do
+                paths_to_backup+=("$m")
+            done
+        fi
+    done < "$CONFIG"
+
+    if [[ ${#paths_to_backup[@]} -eq 0 ]]; then
+        echo "Tidak ada file untuk dibackup."
+        exit 1
+    fi
+
+    if [[ "$MODE" == "tar.gz" ]]; then
+        BACKUP_FILE="$BACKUP_DIR/backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+        tar -czf "$BACKUP_FILE" "${paths_to_backup[@]}"
+        if [[ $? -eq 0 ]]; then
+            echo "✅ Backup selesai: $BACKUP_FILE"
+        else
+            echo "❌ Gagal membuat arsip backup."
+            exit 1
+        fi
+    elif [[ "$MODE" == "folder" ]]; then
+        BACKUP_FOLDER="$BACKUP_DIR/backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$BACKUP_FOLDER"
+        for f in "${paths_to_backup[@]}"; do
+            echo "Salin $f → $BACKUP_FOLDER"
+            cp -r --parents "$f" "$BACKUP_FOLDER"
+        done
+        echo "✅ Backup selesai di folder: $BACKUP_FOLDER"
+    else
+        echo "❌ Mode tidak dikenali: $MODE"
+        exit 1
+    fi
+}
+
+restore() {
+    BACKUP_TO_RESTORE="$1"
+    if [[ ! -e "$BACKUP_TO_RESTORE" ]]; then
+        echo "❌ File/folder backup tidak ditemukan."
+        exit 1
+    fi
+
+    echo "=== Mulai Restore ==="
+
+    if [[ -d "$BACKUP_TO_RESTORE" ]]; then
+        # Mode folder
+        cd "$BACKUP_TO_RESTORE" || exit 1
+        find . -type f | while read -r rel; do
+            target="/$rel"
+            echo "Restore $rel → $target"
+            cp -r "$rel" "$target"
+        done
+        echo "✅ Restore dari folder selesai."
+    elif [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
+        # Mode tar.gz
+        mkdir -p "$TMP_RESTORE"
+        tar -xzf "$BACKUP_TO_RESTORE" -C "$TMP_RESTORE"
+        while read -r path do_backup do_restore; do
+            [[ "$path" =~ ^#.*$ || -z "$path" ]] && continue
+            if [[ "$do_restore" == "yes" ]]; then
+                matches=$(ls -d $TMP_RESTORE$path 2>/dev/null)
+                if [[ $? -ne 0 || -z "$matches" ]]; then
+                    echo "❌ File $path gagal direstore."
+                    read -p "Skip file ini (s) atau rollback semua (r)? " choice
+                    if [[ "$choice" == "r" ]]; then
+                        echo "Rollback semua restore..."
+                        rm -rf "$TMP_RESTORE"
+                        exit 1
+                    else
+                        echo "Skip $path"
+                        continue
+                    fi
+                fi
+                echo "Restore $path → $path"
+                cp -r "$TMP_RESTORE$path" "$path"
+            fi
+        done < "$CONFIG"
+        rm -rf "$TMP_RESTORE"
+        echo "✅ Restore dari tar.gz selesai."
+    else
+        echo "❌ Format backup tidak dikenali."
+        exit 1
+    fi
+}
+
+README_FILE="$BASE_DIR/README"
+show_help() {
+    if [[ -f "$README_FILE" ]]; then
+        cat "$README_FILE"
+    else
+        echo "README tidak ditemukan: $README_FILE"
+        echo "Silakan buat README untuk dokumentasi."
+    fi
+}
+
+case "$1" in
+    backup)
+        if [[ "$2" == "--tar" ]]; then
+            backup "tar.gz"
+        elif [[ "$2" == "--dir" ]]; then
+            backup "folder"
+        else
+            echo "Gunakan: $0 backup [--tar|--dir]"
+            exit 1
+        fi
+        ;;
+    restore)
+        if [[ -z "$2" ]]; then
+            echo "Gunakan: $0 restore <file_backup.tar.gz|folder_backup>"
+            exit 1
+        fi
+        restore "$2"
+        ;;
+    --help|-h)
+        show_help
+        ;;
+    *)
+        echo "Gunakan: $0 {backup [--tar|--dir]|restore <file|folder>}"
+        exit 1
+        ;;
+esac
+

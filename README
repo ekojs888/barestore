@@ -14,7 +14,7 @@ Usage:
   backup_restore.sh --help
       Menampilkan panduan ini.
 
-Config file: /etc/backup_restore.conf
+Config file: /etc/barestore.conf
 Format baris config:
   <path>    <backup:yes|no>    <restore:yes|no>
 
@@ -29,5 +29,8 @@ Keterangan:
   - Saat restore, jika ada file gagal direstore:
        (s) skip file
        (r) rollback semua dan batalkan restore
-  - Hasil backup tersimpan di /var/backups/custom/backup_YYYYMMDD_HHMMSS.tar.gz
+  - Hasil backup tersimpan di /root/Documents/barestore/backup/backup_YYYYMMDD_HHMMSS.tar.gz
+
+mode default adalah mode tar.gz #barestore backup --tar
+mode folder bisa mengetikan #barestore backup --dir
 
