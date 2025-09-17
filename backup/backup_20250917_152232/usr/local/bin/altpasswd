@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# altpasswd.sh - simple CRUD for /etc/alt_passwd (username:yescrypt_hash)
+# Requirements: mkpasswd (from whois)
+# Usage: sudo altpasswd.sh <command> [args]
+# Commands:
+#   add <username>
+#   mod <username>
+#   del <username>
+#   list
+#   show-hash <username>
+#   backup [path]
+#   restore <backup-file>
+
+set -euo pipefail
+
+ALTFILE="/etc/alt_passwd"
+BACKUP_DIR="/var/backups/alt_passwd"
+MKPASSWD_CMD="$(command -v mkpasswd || true)"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+info() { echo "INFO: $*"; }
+
+# ensure running as root
+if [[ $EUID -ne 0 ]]; then
+  die "This script must be run as root. Use sudo."
+fi
+
+# ensure mkpasswd exists
+if [[ -z "$MKPASSWD_CMD" ]]; then
+  die "mkpasswd not found. Install package 'whois' (provides mkpasswd)."
+fi
+
+# ensure alt file exists (create empty if missing)
+ensure_altfile() {
+  if [[ ! -e "$ALTFILE" ]]; then
+    touch "$ALTFILE"
+    chown root:root "$ALTFILE"
+    chmod 600 "$ALTFILE"
+  else
+    # enforce permissions/ownership
+    chown root:root "$ALTFILE"
+    chmod 600 "$ALTFILE"
+  fi
+}
+
+# helper: prompt password twice (silent) and verify match
+prompt_pass() {
+  local pass1 pass2
+  # read -s to avoid echo
+  read -r -s -p "Enter password: " pass1
+  echo
+  read -r -s -p "Retype password: " pass2
+  echo
+  if [[ -z "$pass1" ]]; then
+    echo "Password cannot be empty." >&2
+    return 1
+  fi
+  if [[ "$pass1" != "$pass2" ]]; then
+    echo "Passwords do not match." >&2
+    # clear variables
+    pass1='' pass2=''
+    return 2
+  fi
+  # export password via global variable PASS for caller to use safely
+  PASS="$pass1"
+  # try to clear local copies
+  pass1='' pass2=''
+  return 0
+}
+
+# create bcrypt/yescrypt hash from PASS using mkpasswd
+make_hash() {
+  local pass="$1"
+  # mkpasswd -m yescrypt "password"
+  # Use printf to avoid issues with special chars
+  local newhash
+  newhash="$("$MKPASSWD_CMD" -m yescrypt <<<"$pass")" || return 1
+  # return via stdout
+  printf "%s" "$newhash"
+}
+
+# CRUD operations
+cmd_add() {
+  local user="$1"
+  ensure_altfile
+  if grep -q -E "^${user}:" "$ALTFILE"; then
+    die "User '$user' already exists in $ALTFILE. Use 'mod' to change password."
+  fi
+
+  prompt_pass || return $?
+  # create hash
+  local hash
+  hash="$(make_hash "$PASS")" || die "Failed to create hash."
+  # append safely using tempfile
+  local tmp
+  tmp="$(mktemp)" || die "mktemp failed"
+  chmod 600 "$tmp"
+  printf "%s:%s\n" "$user" "$hash" >> "$tmp"
+  # merge with existing file
+  cat "$ALTFILE" >> "$tmp"
+  mv "$tmp" "$ALTFILE"
+  chown root:root "$ALTFILE"
+  chmod 600 "$ALTFILE"
+  # clear PASS
+  PASS=''
+  info "Added user '$user' to $ALTFILE"
+}
+
+cmd_mod() {
+  local user="$1"
+  ensure_altfile
+  if ! grep -q -E "^${user}:" "$ALTFILE"; then
+    die "User '$user' not found in $ALTFILE. Use 'add' to create."
+  fi
+  prompt_pass || return $?
+  local hash
+  hash="$(make_hash "$PASS")" || die "Failed to create hash."
+  local tmp
+  tmp="$(mktemp)" || die "mktemp failed"
+  chmod 600 "$tmp"
+  # write updated content - replace line
+  awk -v u="$user" -v h="$hash" -F: 'BEGIN{OFS=":"}
+    $1==u { print u, h; next }
+    { print $0 }
+  ' "$ALTFILE" > "$tmp"
+  mv "$tmp" "$ALTFILE"
+  chown root:root "$ALTFILE"
+  chmod 600 "$ALTFILE"
+  PASS=''
+  info "Updated password for user '$user' in $ALTFILE"
+}
+
+cmd_del() {
+  local user="$1"
+  ensure_altfile
+  if ! grep -q -E "^${user}:" "$ALTFILE"; then
+    die "User '$user' not found in $ALTFILE."
+  fi
+  # create backup first
+  mkdir -p "$BACKUP_DIR"
+  cp -a "$ALTFILE" "$BACKUP_DIR/alt_passwd.$(date -u +%Y%m%dT%H%M%SZ).bak"
+  # remove user
+  awk -v u="$user" -F: '$1!=u { print $0 }' "$ALTFILE" > "${ALTFILE}.tmp" && mv "${ALTFILE}.tmp" "$ALTFILE"
+  chown root:root "$ALTFILE"
+  chmod 600 "$ALTFILE"
+  info "Removed user '$user' from $ALTFILE (backup created)"
+}
+
+cmd_list() {
+  ensure_altfile
+  awk -F: '{ print $1 }' "$ALTFILE" | sed '/^$/d'
+}
+
+cmd_show_hash() {
+  local user="$1"
+  ensure_altfile
+  if ! grep -q -E "^${user}:" "$ALTFILE"; then
+    die "User '$user' not found in $ALTFILE."
+  fi
+  grep -m1 -E "^${user}:" "$ALTFILE"
+}
+
+cmd_backup() {
+  ensure_altfile
+  local dest="${1:-}"
+  mkdir -p "$BACKUP_DIR"
+  if [[ -z "$dest" ]]; then
+    dest="$BACKUP_DIR/alt_passwd.$(date -u +%Y%m%dT%H%M%SZ).bak"
+  fi
+  cp -a "$ALTFILE" "$dest"
+  chown root:root "$dest"
+  chmod 600 "$dest"
+  info "Backup saved to $dest"
+}
+
+cmd_restore() {
+  local src="$1"
+  if [[ -z "$src" || ! -f "$src" ]]; then
+    die "Restore file not found. Usage: restore <backup-file>"
+  fi
+  cp -a "$src" "$ALTFILE"
+  chown root:root "$ALTFILE"
+  chmod 600 "$ALTFILE"
+  info "Restored $ALTFILE from $src"
+}
+
+usage() {
+  cat <<EOF
+Usage: sudo $0 <command> [args]
+
+Commands:
+  add <username>         Add username with alternate password (prompts password)
+  mod <username>         Modify alternate password (prompts password)
+  del <username>         Delete username from $ALTFILE (creates backup)
+  list                   List usernames in $ALTFILE (no hashes shown)
+  show-hash <username>   Show username:hash (WARNING: exposes hash)
+  backup [path]          Backup $ALTFILE to path or to $BACKUP_DIR
+  restore <backup-file>  Restore $ALTFILE from backup file
+
+Examples:
+  sudo $0 add alice
+  sudo $0 mod alice
+  sudo $0 del alice
+  sudo $0 list
+  sudo $0 show-hash alice
+  sudo $0 backup
+  sudo $0 restore /var/backups/alt_passwd/alt_passwd.20250916T120000Z.bak
+EOF
+  exit 1
+}
+
+# main
+if [[ $# -lt 1 ]]; then
+  usage
+fi
+
+cmd="$1"; shift || true
+
+case "$cmd" in
+  add)   [[ $# -eq 1 ]] || usage; cmd_add "$1" ;;
+  mod)   [[ $# -eq 1 ]] || usage; cmd_mod "$1" ;;
+  del)   [[ $# -eq 1 ]] || usage; cmd_del "$1" ;;
+  list)  cmd_list ;;
+  "show-hash") [[ $# -eq 1 ]] || usage; cmd_show_hash "$1" ;;
+  backup) cmd_backup "$1" ;;
+  restore) [[ $# -eq 1 ]] || usage; cmd_restore "$1" ;;
+  *) usage ;;
+esac
+
+exit 0
+

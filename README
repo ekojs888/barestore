@@ -1,0 +1,29 @@
+Backup & Restore Utility
+
+Usage:
+  backup_restore.sh backup
+      Membuat file backup tar.gz sesuai konfigurasi.
+
+  backup_restore.sh restore <file_backup.tar.gz>
+      Mengembalikan file dari backup.
+
+  backup_restore.sh --help
+      Menampilkan panduan ini.
+
+Config file: /etc/backup_restore.conf
+Format baris config:
+  <path>    <backup:yes|no>    <restore:yes|no>
+
+Contoh:
+  /etc/passwd      yes   yes
+  /etc/hostname    yes   no
+  /etc/pam.d/*     yes   yes
+
+Keterangan:
+  - Jika backup gagal (file tidak ditemukan), script akan menanyakan
+    apakah dilanjutkan atau dihentikan.
+  - Saat restore, jika ada file gagal direstore:
+       (s) skip file
+       (r) rollback semua dan batalkan restore
+  - Hasil backup tersimpan di /var/backups/custom/backup_YYYYMMDD_HHMMSS.tar.gz
+
