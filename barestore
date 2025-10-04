@@ -3,9 +3,10 @@
 # Script untuk backup & restore dengan config dinamis + enkripsi opsional
 
 CONFIG="/etc/barestore.conf"
-BASE_DIR="/root/Documents/barestore"
-BACKUP_DIR="$BASE_DIR/backup"
+#BASE_DIR="/root/Documents/barestore"
+BACKUP_DIR="/var/lib/barestore"
 TMP_RESTORE="/tmp/restore_tmp"
+READMEDIR="/usr/share/doc/barestore"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -137,7 +138,7 @@ restore() {
     fi
 }
 
-README_FILE="$BASE_DIR/README"
+README_FILE="$READMEDIR/README"
 show_help() {
     if [[ -f "$README_FILE" ]]; then
         cat "$README_FILE"
